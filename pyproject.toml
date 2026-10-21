@@ -43,6 +43,9 @@ dependencies = [
 [tool.uv]
 override-dependencies = [
     "lxml>=6.1.0",
+    # inkex requires PyGObject outside Windows, but only its GUI module imports it.
+    # Limit it to Linux so `uv sync` on macOS skips the pygobject/pycairo source build.
+    "pygobject; sys_platform == 'linux'",
 ]
 
 [dependency-groups]
