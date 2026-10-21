@@ -1,7 +1,7 @@
 # Installation
 
-Tested with Inkscape 1.4.4 on Ubuntu 24.04 and Inkscape 1.4.3 on macOS
-(Apple Silicon). Python 3.12+ required.
+Tested with Inkscape 1.4.4 on Ubuntu 24.04 and macOS (Apple Silicon).
+Python 3.12+ required.
 
 ## macOS
 
