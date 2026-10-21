@@ -18,7 +18,7 @@ Let your AI agent design, edit, and analyze vector graphics through Inkscape —
   <a href="https://modelcontextprotocol.io"><img src="https://img.shields.io/badge/MCP-1.x-1F6FEB?style=flat-square&logo=anthropic&logoColor=white" alt="MCP"></a>
   <a href="https://github.com/PrefectHQ/fastmcp"><img src="https://img.shields.io/badge/FastMCP-3.2-7c5cfc?style=flat-square" alt="FastMCP"></a>
   <a href="https://inkscape.org"><img src="https://img.shields.io/badge/Inkscape-1.4.4-000000?style=flat-square&logo=inkscape&logoColor=white" alt="Inkscape"></a>
-  <a href="#getting-started"><img src="https://img.shields.io/badge/platform-Linux%20%7C%20Windows-informational?style=flat-square" alt="Platform: Linux | Windows"></a>
+  <a href="#getting-started"><img src="https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20macOS-informational?style=flat-square" alt="Platform: Linux | Windows | macOS"></a>
   <a href="https://github.com/astral-sh/ruff"><img src="https://img.shields.io/badge/style-ruff-D7FF64?style=flat-square&logo=ruff&logoColor=black" alt="Ruff"></a>
   <a href="https://github.com/pre-commit/pre-commit"><img src="https://img.shields.io/badge/pre--commit-enabled-success?style=flat-square&logo=pre-commit&logoColor=white" alt="pre-commit"></a>
 </p>
@@ -38,7 +38,7 @@ No external network. Just the Inkscape binary, an optional running Inkscape wind
 
 ## Getting started
 
-> Tested with **Inkscape 1.4.4** on Ubuntu 24.04.
+> Tested with **Inkscape 1.4.4** on Ubuntu 24.04 and **Inkscape 1.4.3** on macOS (Apple Silicon).
 
 ```bash
 # 1. Install Inkscape + system headers for pycairo / pygobject
@@ -88,6 +88,41 @@ pacman -S mingw-w64-x86_64-dbus   # provides dbus-daemon.exe; MCP auto-discovers
 `gdbus.exe` itself already ships with Inkscape, and the daemon's dependency DLLs are covered by Inkscape's, so MSYS2 is only the delivery vehicle for that one `dbus-daemon.exe`. If you already have one elsewhere, point `INKSCAPE_MCP_DBUS_DAEMON` at it (and `INKSCAPE_MCP_GDBUS` if `gdbus.exe` isn't found automatically).
 
 On Windows the live bridge **launches and manages its own Inkscape instance** — a hand-launched Inkscape isn't on the bus, so have the agent `open_file` a document to work on it. Tested on Inkscape 1.4.x.
+
+### macOS
+
+Headless tools work with a stock Inkscape.app. The live bridge needs a private
+D-Bus session because macOS has no session bus and a Finder-launched Inkscape
+never registers on one.
+
+```bash
+# 1. d-bus + gdbus (the live bridge's managed bus)
+brew install dbus glib
+
+# 2. Point the MCP at the app-bundle executable
+export INKSCAPE_BIN=/Applications/Inkscape.app/Contents/MacOS/inkscape
+
+# 3. Install and run
+uv sync
+uv run inkscape_mcp --mode stdio
+```
+
+Notes specific to macOS:
+
+- The MCP starts its own `dbus-daemon` (unix socket under
+  `~/.cache/inkscape_mcp/`) and launches its own Inkscape under it. A normally
+  launched Inkscape window is **not reachable**; use the MCP's `open_file` to
+  work on a document, or launch Inkscape with
+  `DBUS_SESSION_BUS_ADDRESS=$(cat ~/.cache/inkscape_mcp/bus_address)`.
+- Inkscape's bundled Python can wedge in `dyld_start` on some macOS/Inkscape
+  builds. The server pins Inkscape's `python-interpreter` preference to its own
+  virtualenv Python (which ships inkex), so bridge plugins still run. Set
+  `INKSCAPE_MCP_SET_PYTHON_PREF=0` to leave your preferences untouched.
+- If macOS gates the app after download, allow it once in System Settings →
+  Privacy & Security (or `xattr -dr com.apple.quarantine /Applications/Inkscape.app`
+  when the app is not managed by App Management).
+- Clipboard staging is unavailable; `inkscape_live(operation="insert_svg")`
+  uses the XML-edit path instead.
 
 ## Configuration
 

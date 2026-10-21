@@ -1,6 +1,33 @@
 # Installation
 
-Tested with Inkscape 1.4.4 on Ubuntu 24.04. Python 3.12+ required.
+Tested with Inkscape 1.4.4 on Ubuntu 24.04 and Inkscape 1.4.3 on macOS
+(Apple Silicon). Python 3.12+ required.
+
+## macOS
+
+```bash
+# Inkscape from inkscape.org, installed as /Applications/Inkscape.app
+# Live bridge transport (macOS has no session bus of its own):
+brew install dbus glib
+
+# Pin the app-bundle executable (it is not on $PATH):
+export INKSCAPE_BIN=/Applications/Inkscape.app/Contents/MacOS/inkscape
+
+# From a source checkout:
+uv sync
+uv run inkscape_mcp --help
+```
+
+The MCP starts a private `dbus-daemon` and launches its own Inkscape under it;
+a Finder-launched Inkscape is not reachable from the live bridge. On first
+start the server also pins Inkscape's `python-interpreter` preference to the
+MCP virtualenv Python (bridge plugins require inkex). Disable that with
+`INKSCAPE_MCP_SET_PYTHON_PREF=0`.
+
+System extensions are read from
+`/Applications/Inkscape.app/Contents/Resources/share/inkscape/extensions`;
+bridge plugins are installed to
+`~/Library/Application Support/org.inkscape.Inkscape/config/inkscape/extensions/inkscape_mcp`.
 
 ## Prerequisites
 
