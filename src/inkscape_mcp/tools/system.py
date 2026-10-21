@@ -352,8 +352,9 @@ async def inkscape_system(
             }
 
             try:
-                from ..dbus_client import InkscapeDBus
+                from .. import bus_manager, platform_support
                 from ..extension_bridge import bridge_status, needs_inkscape_restart
+                from .live import _get_bus
 
                 bridge = bridge_status()
 
@@ -361,16 +362,33 @@ async def inkscape_system(
                 # inline can wedge the whole event loop on a stalled Inkscape. Run the probe
                 # in a worker thread and give up after a beat.
                 def _probe() -> dict[str, Any]:
-                    bus = InkscapeDBus()
+                    # On Windows/macOS this also ensures the MCP-managed session bus exists,
+                    # so diagnostics reports the same bridge the live tools will use.
+                    bus = _get_bus(config)
                     if bus.is_available():
                         return {"live": True, "needs_restart": needs_inkscape_restart(bus)}
                     return {"live": False}
 
                 try:
-                    bridge.update(await asyncio.wait_for(asyncio.to_thread(_probe), timeout=5.0))
+                    bridge.update(await asyncio.wait_for(asyncio.to_thread(_probe), timeout=10.0))
                 except TimeoutError:
                     bridge["live"] = False
-                    bridge["probe"] = "timed out after 5s"
+                    bridge["probe"] = "timed out after 10s"
+                system_name = (
+                    "macOS"
+                    if platform_support.is_macos()
+                    else ("Windows" if platform_support.is_windows() else "Linux")
+                )
+                bridge["platform"] = {
+                    "system": system_name,
+                    "managed_bus": bus_manager.manages_bus(),
+                    "dbus_daemon": bus_manager.find_dbus_daemon(),
+                    "profile_dir": str(platform_support.profile_dir()),
+                    "bundled_python": platform_support.bundled_python(
+                        str(config.inkscape_executable) if config and config.inkscape_executable else None
+                    ),
+                    "python_preference": platform_support.python_preference_status(),
+                }
             except Exception as exc:
                 bridge = {"error": str(exc)}
 
