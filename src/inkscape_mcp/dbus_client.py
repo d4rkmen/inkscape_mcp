@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import os
 import xml.etree.ElementTree as ET
+from pathlib import Path
 from typing import Any
 
 from jeepney import DBusAddress, MessageType, new_method_call
@@ -13,6 +13,8 @@ from jeepney.wrappers import DBusErrorResponse
 # Bus name and root object path are fixed by Inkscape's GApplication setup.
 BUS_NAME = "org.inkscape.Inkscape"
 APP_PATH = "/org/inkscape/Inkscape"
+# Inkscape 1.4 exposes window-scope actions at .../document/N; older 1.x used .../window/N.
+DOCUMENT_PATH_PREFIX = "/org/inkscape/Inkscape/document"
 WINDOW_PATH_PREFIX = "/org/inkscape/Inkscape/window"
 
 _FALSEY = frozenset({"", "0", "false", "no", "off", "none"})
@@ -37,6 +39,7 @@ class InkscapeDBus:
 
     def __init__(self) -> None:
         self._conn: DBusConnection | None = None
+        self._window_prefix: str | None = None
 
     def _connect(self) -> DBusConnection:
         if self._conn is None:
@@ -64,11 +67,39 @@ class InkscapeDBus:
             raise DBusErrorResponse(reply)
         return reply
 
+    def _detect_window_prefix(self) -> str:
+        """Return the object-path prefix Inkscape uses for document/window children.
+
+        Inkscape 1.4 renamed ``/window/N`` to ``/document/N``. Introspecting the
+        root once tells us which generation we are talking to instead of guessing
+        and failing with "Object does not exist at path".
+        """
+        if self._window_prefix is not None:
+            return self._window_prefix
+        addr = DBusAddress(
+            object_path=APP_PATH,
+            bus_name=BUS_NAME,
+            interface="org.freedesktop.DBus.Introspectable",
+        )
+        try:
+            reply = self._send(new_method_call(addr, "Introspect", "", ()))
+            root = ET.fromstring(reply.body[0])  # noqa: S314 — trusted local introspection XML
+            names = {node.get("name") for node in root.findall("node")}
+        except Exception:
+            names = set()
+        if "document" in names:
+            self._window_prefix = DOCUMENT_PATH_PREFIX
+        elif "window" in names:
+            self._window_prefix = WINDOW_PATH_PREFIX
+        else:
+            self._window_prefix = DOCUMENT_PATH_PREFIX
+        return self._window_prefix
+
     def _scope_path(self, scope: str, window_id: int) -> str:
         if scope == "app":
             return APP_PATH
         if scope == "window":
-            return f"{WINDOW_PATH_PREFIX}/{window_id}"
+            return f"{self._detect_window_prefix()}/{window_id}"
         raise ValueError(f"scope must be 'app' or 'window', got {scope!r}")
 
     def is_available(self) -> bool:
@@ -148,18 +179,18 @@ class InkscapeDBus:
         self._send(msg)
 
     def open_file(self, path: str) -> None:
-        abs_path = os.path.abspath(path)
+        uri = Path(path).resolve().as_uri()
         addr = DBusAddress(
             object_path=APP_PATH,
             bus_name=BUS_NAME,
             interface="org.freedesktop.Application",
         )
-        msg = new_method_call(addr, "Open", "asa{sv}", ([f"file://{abs_path}"], {}))
+        msg = new_method_call(addr, "Open", "asa{sv}", ([uri], {}))
         self._send(msg)
 
     def list_windows(self) -> list[int]:
         addr = DBusAddress(
-            object_path=WINDOW_PATH_PREFIX,
+            object_path=self._detect_window_prefix(),
             bus_name=BUS_NAME,
             interface="org.freedesktop.DBus.Introspectable",
         )
