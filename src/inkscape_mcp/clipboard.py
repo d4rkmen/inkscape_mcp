@@ -95,6 +95,14 @@ def stage_svg_fragment(svg_xml: str) -> None:
         return
 
     session = detect_session()
+    if sys.platform == "darwin" and not session:
+        # pbcopy cannot advertise Inkscape's custom image/x-inkscape-svg target, so a
+        # paste would arrive as plain text. The live tool inserts through edit_xml.
+        raise RuntimeError(
+            "No graphical session reachable for clipboard staging: install wl-clipboard "
+            "(wl-copy) or xclip on Linux. Clipboard SVG staging is not supported on macOS; "
+            "use inkscape_live operation='insert_svg' (edit_xml-based) instead."
+        )
     if session == "x11":
         cmd = ["xclip", "-selection", "clipboard", "-t", INKSCAPE_SVG_MIME]
     elif session == "wayland":
