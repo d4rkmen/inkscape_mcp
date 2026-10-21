@@ -17,7 +17,7 @@ from .. import bus_manager
 from ..clipboard import SVG_NS
 from ..dbus_client import InkscapeDBus
 from ..extension_bridge import invoke_extension
-from ..win_dbus_client import WinInkscapeDBus
+from ..win_dbus_client import GDBusInkscapeDBus
 
 
 class LiveResult(BaseModel):
@@ -181,30 +181,40 @@ def _resolve_inkscape_exe(config: Any) -> str:
 def _get_bus(config: Any = None) -> Any:
     """Return the platform-appropriate live bridge.
 
-    Windows has no autostarted D-Bus session bus and jeepney can't speak the TCP bus, so
-    we use a ``gdbus.exe``-backed client bound to a managed session bus (see
-    ``bus_manager``). Linux/macOS keep the jeepney client. The Windows client is cheap to
-    build and bound to a possibly-changing bus address, so it is not cached.
+    Windows and macOS have no autostarted D-Bus session bus. There we ensure a managed
+    bus (see ``bus_manager``) and bind a ``gdbus``-backed client to it (``gdbus.exe`` on
+    Windows, Homebrew GLib's ``gdbus`` on macOS). Linux keeps the jeepney session-bus
+    client. Managed clients are cheap to build and bound to a possibly changing bus
+    address, so they are not cached.
     """
     global _BUS
-    if bus_manager.is_windows():
+    if bus_manager.manages_bus():
         inkscape_exe = _resolve_inkscape_exe(config)
         gdbus = bus_manager.find_gdbus(inkscape_exe)
         if not gdbus:
-            raise RuntimeError("gdbus.exe not found (expected next to inkscape.exe or on PATH)")
+            hint = (
+                "Install GLib ('brew install glib') or set INKSCAPE_MCP_GDBUS."
+                if bus_manager.is_macos()
+                else "gdbus.exe not found (expected next to inkscape.exe or on PATH)"
+            )
+            raise RuntimeError(hint)
         address = bus_manager.ensure_bus(gdbus)
-        return WinInkscapeDBus(gdbus, address)
+        return GDBusInkscapeDBus(gdbus, address)
     if _BUS is None:
         _BUS = InkscapeDBus()
     return _BUS
 
 
 def _auto_launch_inkscape(config: Any) -> bool:
-    """Windows auto-manage: ensure a bus + a running Inkscape under it. Returns ready."""
+    """Managed-platform auto-launch: ensure a bus + a running Inkscape under it."""
     inkscape_exe = _resolve_inkscape_exe(config)
     gdbus = bus_manager.find_gdbus(inkscape_exe)
     if not gdbus:
-        raise RuntimeError("gdbus.exe not found (expected next to inkscape.exe or on PATH)")
+        raise RuntimeError(
+            "gdbus not found. Install GLib ('brew install glib') or set INKSCAPE_MCP_GDBUS."
+            if bus_manager.is_macos()
+            else "gdbus.exe not found (expected next to inkscape.exe or on PATH)"
+        )
     address = bus_manager.ensure_bus(gdbus)
     return bus_manager.ensure_inkscape(gdbus, address, inkscape_exe)
 
@@ -1354,8 +1364,8 @@ async def inkscape_live(
         except Exception as exc:
             return _result(operation, False, f"ping failed: {exc}", error=str(exc), start=start)
 
-    # Auto-manage (Windows): if the bridge isn't live yet, start the bus + Inkscape.
-    if bus_manager.is_windows() and not bus.is_available():
+    # Auto-manage (Windows/macOS): if the bridge isn't live yet, start the bus + Inkscape.
+    if bus_manager.manages_bus() and not bus.is_available():
         try:
             _auto_launch_inkscape(config)
         except Exception as exc:
