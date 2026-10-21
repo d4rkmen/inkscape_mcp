@@ -718,6 +718,11 @@ def _load_action_descriptions(cli_executable: str = "inkscape") -> dict[str, str
         return _ACTION_DESCRIPTIONS
 
     result: dict[str, str] = {}
+    # Inkscape aborts its UTF-8 conversion (and prints only the first action) when
+    # LANG is empty, which is common in IDE terminals — force a UTF-8 locale.
+    env = os.environ.copy()
+    env["LANG"] = "C.UTF-8"
+    env["LC_ALL"] = "C.UTF-8"
     try:
         completed = subprocess.run(  # noqa: S603 — fixed `inkscape --action-list`, no user input
             [cli_executable, "--action-list"],
@@ -725,6 +730,7 @@ def _load_action_descriptions(cli_executable: str = "inkscape") -> dict[str, str
             timeout=10,
             text=True,
             check=False,
+            env=env,
         )
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
         _ACTION_DESCRIPTIONS = result
@@ -748,6 +754,7 @@ async def _op_list_actions(
     window_id: int,
     target: str,
     start: float,
+    cli_executable: str = "inkscape",
 ) -> dict[str, Any]:
     """List all registered D-Bus actions, annotated with descriptions.
 
@@ -757,7 +764,7 @@ async def _op_list_actions(
     """
     # First call shells out to `inkscape --action-list` with a 10s timeout; keep that off
     # the event loop. Subsequent calls hit the module-level cache and return immediately.
-    descriptions = await asyncio.to_thread(_load_action_descriptions)
+    descriptions = await asyncio.to_thread(_load_action_descriptions, cli_executable)
     app_names = sorted(bus.list_actions("app"))
     window_names = sorted(bus.list_actions("window", window_id))
 
@@ -1443,7 +1450,9 @@ async def inkscape_live(
         if operation == "apply_action":
             return _op_apply_action(bus, operation, target, payload, window_id, start)
         if operation == "list_actions":
-            return await _op_list_actions(bus, operation, window_id, target, start)
+            return await _op_list_actions(
+                bus, operation, window_id, target, start, cli_executable=_resolve_inkscape_exe(config)
+            )
         if operation == "open_file":
             return _op_open_file(bus, operation, target, start)
         if operation == "save_snapshot":
