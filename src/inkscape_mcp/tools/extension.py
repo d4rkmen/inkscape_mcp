@@ -21,7 +21,6 @@ import asyncio
 import json
 import os
 import re
-import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -179,9 +178,10 @@ def _build_command(ext: _Extension, params: dict[str, Any], input_path: Path) ->
     """Build the subprocess argv for invoking an inkex extension headlessly."""
     if ext.script_path is None:
         raise ValueError(f"extension {ext.id!r} has no script command")
-    interpreter = ext.interpreter or "python"
-    if interpreter == "python":
-        interpreter = sys.executable  # use our resolved Python
+    interpreter = platform_support.extension_interpreter(
+        ext.interpreter,
+        inkscape_binary=platform_support.resolve_inkscape_binary(),
+    )
     argv: list[str] = [interpreter, str(ext.script_path)]
     known = {p.name: p for p in ext.params}
     for key, val in params.items():
