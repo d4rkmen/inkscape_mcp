@@ -164,7 +164,11 @@ def _resolve_window_id(bus: InkscapeDBus, requested: int) -> int:
 
 def _resolve_inkscape_exe(config: Any) -> str:
     exe = getattr(config, "inkscape_executable", None) if config is not None else None
-    exe = exe or os.environ.get("INKS_INKSCAPE_BIN") or os.environ.get("INKSCAPE_BIN") or "inkscape"
+    exe = exe or os.environ.get("INKS_INKSCAPE_BIN") or os.environ.get("INKSCAPE_BIN")
+    if not exe:
+        from .. import platform_support
+
+        exe = platform_support.resolve_inkscape_binary() or "inkscape"
     # Inkscape's detector may return inkscape.COM (console wrapper); the GUI binary
     # inkscape.exe sits beside it and launches without spawning a console window.
     if exe.lower().endswith("inkscape.com"):
