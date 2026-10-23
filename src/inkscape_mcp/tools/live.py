@@ -583,68 +583,6 @@ async def _op_insert_svg(
     return result
 
 
-# Inkex code that reads the staged fragment and appends its child elements into the
-# live document root. Used where Inkscape exposes no paste-in-place action (e.g. 1.4.x).
-_INSERT_VIA_INKEX_CODE = (
-    "import os as _os\n"
-    "from lxml import etree as _ET\n"
-    "_p = _os.path.expanduser('~/.cache/inkscape_mcp/exchange/insert_fragment.svg')\n"
-    "_root = _ET.parse(_p).getroot()\n"
-    "_added = 0\n"
-    "for _c in list(_root):\n"
-    "    svg.append(_c)\n"
-    "    _added += 1\n"
-    "result = {'added': _added}\n"
-)
-
-
-async def _op_insert_svg_via_inkex(
-    bus: Any,
-    operation: str,
-    payload: str,
-    start: float,
-) -> dict[str, Any]:
-    """Insert an SVG fragment by appending its children to the live document via inkex.
-
-    Inkscape 1.4.x exposes no ``paste-in-place`` action over D-Bus, so the clipboard
-    route is unavailable. We stage the fragment to the exchange dir and run the
-    ``mcp_execute`` extension to splice its child elements into the document — one
-    undoable ``MCP: Execute`` command, like every other bridge edit.
-    """
-    if not payload.strip():
-        return _result(operation, False, "payload (SVG fragment) is required", error="empty payload", start=start)
-
-    from ..extension_bridge import BRIDGE_LOCK, EXCHANGE_DIR, _invoke_extension_locked
-
-    # The staged fragment shares the exchange dir's fixed-name problem, so it has to be
-    # written and consumed inside the same critical section as the invocation itself.
-    async with BRIDGE_LOCK:
-        EXCHANGE_DIR.mkdir(parents=True, exist_ok=True)
-        (EXCHANGE_DIR / "insert_fragment.svg").write_text(payload, encoding="utf-8")
-        result = await _invoke_extension_locked(
-            bus,
-            _EXECUTE_EXTENSION,
-            {"python_code": _INSERT_VIA_INKEX_CODE},
-            scope="app",
-            window_id=1,
-            timeout_s=30.0,
-        )
-    if not result.success or result.data.get("ok") is False:
-        message = result.error or result.data.get("error", "insert_svg failed")
-        if result.stderr:
-            message = f"{message}\nstderr:\n{result.stderr}"
-        return _result(operation, False, message, data={"stderr": result.stderr}, error=result.error, start=start)
-
-    added = (result.data.get("result") or {}).get("added", 0)
-    return _result(
-        operation,
-        True,
-        f"inserted {added} element(s) into the live document",
-        data={"added": added, "bytes": len(payload)},
-        start=start,
-    )
-
-
 def _op_delete_selected(bus: InkscapeDBus, operation: str, window_id: int, start: float) -> dict[str, Any]:
     # delete-selection is the explicit object-delete; `delete` is context-sensitive (text/nodes).
     # window_id must be threaded through: the follow-up document-save is window-scoped, so
@@ -1350,7 +1288,7 @@ async def inkscape_live(
     config: Any = None,
     **kwargs: Any,
 ) -> dict[str, Any]:
-    """Drive a running Inkscape GUI via D-Bus + clipboard staging."""
+    """Drive a running Inkscape GUI via D-Bus."""
     start = time.perf_counter()
     try:
         bus = _get_bus(config)
