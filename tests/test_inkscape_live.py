@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from inkscape_mcp import bus_manager
 from inkscape_mcp.tools.live import _get_bus
 from tests._helpers import payload as _payload
 
@@ -35,15 +36,31 @@ async def test_list_actions(mcp):
     app_names = {a["name"] for a in p["data"]["app"]}
     window_names = {w["name"] for w in p["data"]["window"]}
     assert "select-by-id" in app_names
-    # Window scope exists and publishes actions; the exact set differs between
-    # Inkscape builds (macOS lists extension actions, Linux includes paste).
-    assert window_names
+    if bus_manager.manages_bus():
+        # Managed platforms expose document actions, which may only include extensions.
+        assert window_names
+    else:
+        assert "paste-in-place" in window_names
     # Annotated form: each entry has a description (may be empty).
     sample = p["data"]["app"][0]
     assert "name" in sample and "description" in sample
 
 
+@pytest.mark.skipif(bus_manager.manages_bus(), reason="Linux window-action contract")
 async def test_list_actions_filter(mcp):
+    res = await mcp.call_tool(
+        "inkscape_live",
+        {"operation": "list_actions", "target": "layer-new"},
+    )
+    p = _payload(res)
+    assert p["success"] is True
+    names = {a["name"] for a in p["data"]["app"]} | {w["name"] for w in p["data"]["window"]}
+    assert any("layer-new" in n for n in names)
+    assert "select-by-id" not in names
+
+
+@pytest.mark.skipif(not bus_manager.manages_bus(), reason="Managed-platform document-action contract")
+async def test_list_actions_filter_managed(mcp):
     res = await mcp.call_tool(
         "inkscape_live",
         {"operation": "list_actions", "target": "select-by-id"},

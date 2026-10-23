@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from inkscape_mcp import bus_manager
 from inkscape_mcp.tools.live import _get_bus
 
 
@@ -36,10 +37,11 @@ def test_list_actions_window(bus) -> None:
     if not windows:
         pytest.skip("no Inkscape windows open")
     actions = bus.list_actions(scope="window", window_id=windows[0])
-    # Which actions are window-scoped varies by Inkscape build/version (macOS 1.4
-    # exposes mostly extension actions here, Linux also has paste). The contract is
-    # that the document object resolves and publishes a non-empty action list.
-    assert actions
+    if bus_manager.manages_bus():
+        # Managed platforms expose document actions, which may only include extensions.
+        assert actions
+    else:
+        assert "paste" in actions or "paste-in-place" in actions
 
 
 def test_describe_select_by_id(bus) -> None:
