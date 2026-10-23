@@ -30,7 +30,7 @@ Pair it with a **running Inkscape window** and the agent works alongside you —
 ## How it works
 
 1. The agent calls one of eight portmanteau tools — `inkscape_file`, `inkscape_vector`, `inkscape_analysis`, `inkscape_system`, `inkscape_extension`, `inkscape_gradient`, `inkscape_metadata`, or `inkscape_live` — with an `operation` string that picks the actual behavior.
-2. For headless work the server dispatches through `InkscapeCliWrapper`, which builds and runs an `inkscape --actions=...` (or `--export-...`) command. For live-canvas work it talks to a running Inkscape window over D-Bus and stages SVG fragments through the clipboard.
+2. For headless work the server dispatches through `InkscapeCliWrapper`, which builds and runs an `inkscape --actions=...` (or `--export-...`) command. For live-canvas work it talks to a running Inkscape window over D-Bus and inserts SVG fragments through the XML-edit extension.
 3. Inkscape reads your input file (or the open document), runs the operation, and writes the output.
 4. The server returns dimensions, file paths, validation results, or whatever the operation produces — typed and trimmed for the agent's context window.
 
@@ -45,11 +45,7 @@ No external network. Just the Inkscape binary, an optional running Inkscape wind
 sudo add-apt-repository ppa:inkscape.dev/stable
 sudo apt update
 sudo apt install inkscape libcairo2-dev libgirepository-2.0-dev libgirepository1.0-dev \
-pkg-config python3-dev xclip
-# xclip stages SVG fragments for clipboard-based insert into the canvas.
-# Clipboard ops auto-detect the backend. On Wayland (the Ubuntu 24.04 default)
-# wl-clipboard is preferred if installed; otherwise xclip is used, which works
-# because Inkscape runs as an XWayland client. Either package is sufficient.
+pkg-config python3-dev
 
 # 2. Register with Claude Code (uvx fetches inkscape-mcp from PyPI on first run)
 claude mcp add inkscape_mcp -s user -- uvx inkscape_mcp
@@ -91,9 +87,14 @@ On Windows the live bridge **launches and manages its own Inkscape instance** �
 
 ### macOS
 
-Headless tools work with a stock Inkscape.app. The live bridge needs a private
-D-Bus session because macOS has no session bus and a Finder-launched Inkscape
-never registers on one.
+Headless tools work with a stock Inkscape.app. **macOS currently requires a source
+checkout and `uv sync`**, rather than the `uvx`/pip installs above. The project's
+`[tool.uv]` overrides skip inkex's PyGObject dependency on macOS; these overrides
+are not published as wheel dependency metadata. A standalone install may therefore
+attempt native PyGObject/pycairo builds.
+
+The live bridge needs a private D-Bus session because a Finder-launched Inkscape
+does not register on the MCP's bus.
 
 ```bash
 # 1. d-bus + gdbus (the live bridge's managed bus)
@@ -102,9 +103,12 @@ brew install dbus glib
 # 2. Point the MCP at the app-bundle executable
 export INKSCAPE_BIN=/Applications/Inkscape.app/Contents/MacOS/inkscape
 
-# 3. Install and run
+# 3. From your source checkout, install and run
 uv sync
 uv run inkscape_mcp --mode stdio
+
+# Register the checkout with Claude Code (replace the absolute path)
+claude mcp add inkscape_mcp -s user -- uv run --directory /absolute/path/to/inkscape_mcp inkscape_mcp
 ```
 
 Notes specific to macOS:
@@ -112,17 +116,21 @@ Notes specific to macOS:
 - The MCP starts its own `dbus-daemon` (unix socket under
   `~/.cache/inkscape_mcp/`) and launches its own Inkscape under it. A normally
   launched Inkscape window is **not reachable**; use the MCP's `open_file` to
-  work on a document, or launch Inkscape with
-  `DBUS_SESSION_BUS_ADDRESS=$(cat ~/.cache/inkscape_mcp/bus_address)`.
-- Inkscape's bundled Python can wedge in `dyld_start` on some macOS/Inkscape
-  builds. The server pins Inkscape's `python-interpreter` preference to its own
-  virtualenv Python (which ships inkex), so bridge plugins still run. Set
-  `INKSCAPE_MCP_SET_PYTHON_PREF=0` to leave your preferences untouched.
+  work on a document.
+- The managed instance uses a dedicated profile at
+  `~/.cache/inkscape_mcp/inkscape-profile`, including its bridge plugins. It does
+  not use or modify your normal Inkscape profile or `INKSCAPE_PROFILE_DIR` override.
+  Headless tools still honor `INKSCAPE_PROFILE_DIR`.
+- The bundled Python has stalled in `dyld_start` on some installations; this is
+  not established as a general macOS defect. Just before a managed launch, the MCP
+  sets **only its isolated profile's** `python-interpreter` to the current server
+  Python. Set `INKSCAPE_MCP_SET_PYTHON_PREF=0` to disable that workaround.
+  Headless server startup never changes the interpreter preference.
 - If macOS gates the app after download, allow it once in System Settings →
   Privacy & Security (or `xattr -dr com.apple.quarantine /Applications/Inkscape.app`
   when the app is not managed by App Management).
-- Clipboard staging is unavailable; `inkscape_live(operation="insert_svg")`
-  uses the XML-edit path instead.
+- `inkscape_live(operation="insert_svg")` uses the XML-edit path on every platform;
+  no clipboard utilities are required.
 
 ## Configuration
 

@@ -11,7 +11,7 @@ D-Bus. Built on FastMCP 3.2.
 - Read the current selection, layer structure, defs, view, pages.
 - Apply any of ~1,070 Inkscape actions on the live document — each one a
   normal undo entry.
-- Insert SVG fragments at the cursor (clipboard-staged).
+- Insert SVG fragments through the XML-edit extension.
 - Edit element attributes and path `d` data in place.
 - Rasterize the document or a single element to PNG so the agent can *see*
   the result and iterate.

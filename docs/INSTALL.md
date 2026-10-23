@@ -5,6 +5,11 @@ Python 3.12+ required.
 
 ## macOS
 
+**Use a source checkout with `uv sync`.** The macOS PyGObject exclusion is a
+root-project uv override, not published package metadata. The standalone `uvx`,
+pip, and `uv add` instructions below are not currently supported macOS install
+paths: inkex's dependencies may still trigger native PyGObject/pycairo builds.
+
 ```bash
 # Inkscape from inkscape.org, installed as /Applications/Inkscape.app
 # Live bridge transport (macOS has no session bus of its own):
@@ -16,18 +21,33 @@ export INKSCAPE_BIN=/Applications/Inkscape.app/Contents/MacOS/inkscape
 # From a source checkout:
 uv sync
 uv run inkscape_mcp --help
+
+# Use your absolute checkout path when registering the server:
+claude mcp add inkscape_mcp -s user -- uv run --directory /absolute/path/to/inkscape_mcp inkscape_mcp
 ```
 
 The MCP starts a private `dbus-daemon` and launches its own Inkscape under it;
-a Finder-launched Inkscape is not reachable from the live bridge. On first
-start the server also pins Inkscape's `python-interpreter` preference to the
-MCP virtualenv Python (bridge plugins require inkex). Disable that with
-`INKSCAPE_MCP_SET_PYTHON_PREF=0`.
+a Finder-launched Inkscape is not reachable from the live bridge. The managed
+instance uses `~/.cache/inkscape_mcp/inkscape-profile`, separate from your normal
+profile and any `INKSCAPE_PROFILE_DIR` override (which headless tools still honor).
+Immediately before launch, only this isolated profile's `python-interpreter` is
+set to the MCP Python for bridge plugins. This works around bundled-Python stalls
+observed on some installations, not a proven defect in every macOS build. Disable
+the workaround with `INKSCAPE_MCP_SET_PYTHON_PREF=0`. Headless initialization and
+diagnostics do not change interpreter preferences; diagnostics never start a bus.
+
+When upgrading from an earlier revision of this branch, close the previous
+MCP-launched Inkscape yourself before the next live call so it restarts with the
+isolated profile. Existing processes are never killed or migrated automatically.
+If that revision changed your normal profile's interpreter preference, restore it
+manually (the old `~/.cache/inkscape_mcp/inkscape-python-pref.json` may contain a
+previous explicit value). The server deliberately does not overwrite user settings
+to guess at a migration.
 
 System extensions are read from
 `/Applications/Inkscape.app/Contents/Resources/share/inkscape/extensions`;
 bridge plugins are installed to
-`~/Library/Application Support/org.inkscape.Inkscape/config/inkscape/extensions/inkscape_mcp`.
+`~/.cache/inkscape_mcp/inkscape-profile/extensions/inkscape_mcp`.
 
 ## Prerequisites
 
@@ -39,12 +59,6 @@ sudo apt install inkscape
 
 # Build deps for the Python extensions pulled in by inkex / pygobject
 sudo apt install libcairo2-dev libgirepository-2.0-dev libgirepository1.0-dev pkg-config python3-dev
-
-# Clipboard staging for inkscape_live's insert_svg. Either package works on either
-# session type — the backend is auto-detected, and on Wayland xclip is used via
-# XWayland when wl-clipboard isn't installed.
-sudo apt install xclip
-# sudo apt install wl-clipboard  # preferred on a native Wayland session
 ```
 
 You also need **Python 3.12+** and **[uv](https://docs.astral.sh/uv/install/)** (recommended) or any modern pip.
