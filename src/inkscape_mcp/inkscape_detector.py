@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
-from pathlib import Path
 
 from . import platform_support
 
@@ -28,7 +26,3 @@ class InkscapeDetector:
         else:
             logger.warning("Inkscape not found on $PATH or any known fallback location")
         return None
-
-    @staticmethod
-    def _is_executable(path: Path) -> bool:
-        return os.access(path, os.X_OK)

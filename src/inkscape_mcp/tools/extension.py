@@ -178,10 +178,7 @@ def _build_command(ext: _Extension, params: dict[str, Any], input_path: Path) ->
     """Build the subprocess argv for invoking an inkex extension headlessly."""
     if ext.script_path is None:
         raise ValueError(f"extension {ext.id!r} has no script command")
-    interpreter = platform_support.extension_interpreter(
-        ext.interpreter,
-        inkscape_binary=platform_support.resolve_inkscape_binary(),
-    )
+    interpreter = platform_support.extension_interpreter(ext.interpreter)
     argv: list[str] = [interpreter, str(ext.script_path)]
     known = {p.name: p for p in ext.params}
     for key, val in params.items():

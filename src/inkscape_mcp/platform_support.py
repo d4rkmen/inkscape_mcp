@@ -11,7 +11,6 @@ here so the Linux/Windows code paths stay untouched.
 
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import sys
@@ -124,6 +123,13 @@ def profile_dir() -> Path:
     return Path(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")) / "inkscape"
 
 
+def live_profile_dir() -> Path:
+    """Keep the managed macOS instance separate from the user's normal profile."""
+    if is_macos():
+        return Path.home() / ".cache" / "inkscape_mcp" / "inkscape-profile"
+    return profile_dir()
+
+
 def user_extensions_dir() -> Path:
     return profile_dir() / "extensions"
 
@@ -152,8 +158,8 @@ def system_extensions_dirs() -> tuple[Path, ...]:
 def bundled_python(inkscape_binary: str | None = None) -> str | None:
     """Inkscape's own bundled Python interpreter, reported by diagnostics.
 
-    Extensions do not run under it: on some macOS builds it wedges in
-    ``dyld_start``, so the MCP uses its own interpreter (see
+    Some installations have stalled in its ``dyld_start``. The managed instance
+    therefore uses the MCP interpreter instead (see
     ``extension_interpreter`` and ``set_inkscape_python_preference``).
     """
     if not is_macos():
@@ -176,7 +182,7 @@ def bundled_python(inkscape_binary: str | None = None) -> str | None:
     return None
 
 
-def extension_interpreter(declared: str | None, inkscape_binary: str | None = None) -> str:
+def extension_interpreter(declared: str | None) -> str:
     """Resolve an INX interpreter declaration to a usable executable.
 
     Headless execution is done by the MCP itself, so it uses the MCP's own Python
@@ -192,21 +198,16 @@ def extension_interpreter(declared: str | None, inkscape_binary: str | None = No
 
 
 def _preferences_path() -> Path:
-    return profile_dir() / "preferences.xml"
+    return live_profile_dir() / "preferences.xml"
 
 
 def set_inkscape_python_preference(interpreter: str | None = None) -> dict[str, Any]:
-    """Point Inkscape's extension runner at a Python that can import inkex.
+    """Configure extension Python only in the MCP-owned macOS live profile.
 
-    Inkscape resolves ``interpreter="python"`` from the ``python-interpreter``
-    attribute on ``<group id="extensions">`` in preferences.xml. On macOS its
-    bundled interpreter is used by default; in some environments that binary
-    wedges in ``dyld_start``, so extensions (including MCP's live bridge
-    plugins) never produce output. The MCP's own interpreter always has inkex,
-    so we pin the preference to it before launching Inkscape.
-
-    Returns a small status dict. Never raises: a failed preference write only
-    degrades live extension support.
+    Some macOS installations have stalled in the bundled Python's ``dyld_start``.
+    This workaround is deliberately scoped to the managed instance, and is applied
+    before launch rather than during headless server initialization. No normal user
+    preferences are changed or require restoration on uninstall.
     """
     if not is_macos():
         return {"changed": False, "reason": "macOS only"}
@@ -233,13 +234,6 @@ def set_inkscape_python_preference(interpreter: str | None = None) -> dict[str, 
         previous = group.get("python-interpreter")
         if previous == target:
             return {"changed": False, "value": target, "previous": previous}
-
-        # Remember the original value so uninstall/repair can restore it.
-        state = Path(os.path.expanduser("~/.cache/inkscape_mcp"))
-        backup = state / "inkscape-python-pref.json"
-        if previous and not backup.exists():
-            state.mkdir(parents=True, exist_ok=True)
-            backup.write_text(json.dumps({"python-interpreter": previous}), encoding="utf-8")
 
         group.set("python-interpreter", target)
         tmp = prefs.with_suffix(".xml.mcp-tmp")

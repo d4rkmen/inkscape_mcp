@@ -17,7 +17,6 @@ from typing import Any
 from fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 
-from . import platform_support
 from .config import load_config
 from .inkscape_detector import InkscapeDetector
 from .logging_config import setup_logging
@@ -249,13 +248,6 @@ class InkscapeMCPServer:
                 logger.info("MCP prompts and resources registered")
             except Exception as e:
                 logger.warning(f"Failed to register prompts/resources: {e}")
-
-            if platform_support.is_macos():
-                # Inkscape's bundled Python can wedge on macOS; pin the extension
-                # interpreter to this process's Python (which has inkex).
-                pref = platform_support.set_inkscape_python_preference()
-                if pref.get("changed"):
-                    logger.info(f"Inkscape extension interpreter set to {pref.get('value')}")
 
             try:
                 from .extension_bridge import install_plugins

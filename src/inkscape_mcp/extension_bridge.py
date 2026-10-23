@@ -48,15 +48,10 @@ BRIDGE_LOCK = asyncio.Lock()
 
 
 def _user_extensions_dir() -> Path:
-    """Inkscape's per-user extensions dir, platform-aware.
-
-    Windows keeps preferences/extensions under ``%APPDATA%\\inkscape``; Linux uses the
-    XDG ``~/.config/inkscape`` location; macOS's GTK build resolves that to
-    ``~/Library/Application Support/org.inkscape.Inkscape/config/inkscape``.
-    """
+    """Install into the live profile, isolated from normal Inkscape on macOS."""
     from . import platform_support
 
-    return platform_support.user_extensions_dir() / "inkscape_mcp"
+    return platform_support.live_profile_dir() / "extensions" / "inkscape_mcp"
 
 
 INSTALL_DIR = _user_extensions_dir()
@@ -209,7 +204,7 @@ def install_plugins() -> dict[str, Any]:
     }
 
 
-def needs_inkscape_restart(bus: InkscapeDBus) -> bool:
+def needs_inkscape_restart(bus: Any) -> bool:
     """True if our plugins are installed on disk but the live Inkscape hasn't picked them up.
 
     Inkscape scans extensions only at startup, so first-time install requires
