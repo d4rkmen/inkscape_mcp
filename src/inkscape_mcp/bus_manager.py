@@ -22,15 +22,17 @@ Discovery / overrides (env):
 
 from __future__ import annotations
 
+import ctypes
 import logging
+import ntpath
 import os
 import re
 import subprocess
-import sys
 import time
 from pathlib import Path
 
 from . import platform_support
+from .platform_support import is_macos, is_windows
 
 log = logging.getLogger(__name__)
 
@@ -65,14 +67,6 @@ class BusError(RuntimeError):
 
 
 # ---- platform ----------------------------------------------------------------------
-
-
-def is_windows() -> bool:
-    return sys.platform == "win32"
-
-
-def is_macos() -> bool:
-    return sys.platform == "darwin"
 
 
 def manages_bus() -> bool:
@@ -151,8 +145,8 @@ def _write_macos_bus_config() -> Path:
     Homebrew's stock session.conf listens on a launchd-provided socket, which only
     exists inside a GUI login session; the MCP may run from a terminal or an IDE
     without that environment. A plain unix socket keeps the bus self-contained.
-    ``DBUS_COOKIE_SHA1`` is required because jeepney cannot use SO_PEERCRED
-    (Linux-only) for EXTERNAL auth on macOS.
+    The macOS bridge uses gdbus, not jeepney. Keep EXTERNAL and the cookie-based
+    fallback available for clients; neither requires Linux's SO_PEERCRED here.
     """
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     MACOS_BUS_DIR.mkdir(parents=True, exist_ok=True)
@@ -306,12 +300,83 @@ def default_canvas() -> str:
     return str(path)
 
 
-def _pid_alive(pid: int) -> bool:
+def _windows_pid_alive(pid: int, executable: str | None) -> bool:
+    from ctypes import wintypes
+
+    # These ctypes entry points exist only on Windows; resolve them lazily.
+    kernel32 = getattr(ctypes, "WinDLL")("kernel32", use_last_error=True)  # noqa: B009 — Windows-only API
+    open_process = kernel32.OpenProcess
+    open_process.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    open_process.restype = wintypes.HANDLE
+    get_exit_code = kernel32.GetExitCodeProcess
+    get_exit_code.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    get_exit_code.restype = wintypes.BOOL
+    query_image = kernel32.QueryFullProcessImageNameW
+    query_image.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)]
+    query_image.restype = wintypes.BOOL
+    close_handle = kernel32.CloseHandle
+    close_handle.argtypes = [wintypes.HANDLE]
+    close_handle.restype = wintypes.BOOL
+
+    handle = open_process(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        # Access denied does not mean the process is dead; avoid duplicate launches.
+        return bool(getattr(ctypes, "get_last_error")() == 5)  # noqa: B009 — Windows-only API
+    try:
+        code = wintypes.DWORD()
+        if not get_exit_code(handle, ctypes.byref(code)):
+            return True  # Unknown, not confirmed dead.
+        if code.value != 259:  # STILL_ACTIVE
+            return False
+        if executable:
+            image = ctypes.create_unicode_buffer(32768)
+            size = wintypes.DWORD(len(image))
+            if query_image(handle, 0, image, ctypes.byref(size)):
+                return ntpath.normcase(ntpath.abspath(image.value)) == ntpath.normcase(ntpath.abspath(executable))
+        return True
+    finally:
+        close_handle(handle)
+
+
+def _posix_process_executable(pid: int) -> str | None:
+    """Best-effort executable identity; unavailable/denied queries remain unknown."""
+    try:
+        if is_macos():
+            libproc = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+            proc_pidpath = libproc.proc_pidpath
+            proc_pidpath.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
+            proc_pidpath.restype = ctypes.c_int
+            buffer = ctypes.create_string_buffer(4096)  # PROC_PIDPATHINFO_MAXSIZE
+            if proc_pidpath(pid, buffer, len(buffer)) > 0:
+                return os.fsdecode(buffer.value)
+            return None
+        return os.readlink(f"/proc/{pid}/exe")
+    except (OSError, AttributeError):
+        return None
+
+
+def _pid_alive(pid: int, executable: str | None = None) -> bool:
+    """Check liveness without signalling on Windows; reject known PID reuse.
+
+    Identity checks are best-effort: permission failures must not cause duplicate
+    launches. Matching an executable is not proof of the original process lifetime.
+    """
+    windows = is_windows()
+    if isinstance(pid, bool) or not isinstance(pid, int) or not 0 < pid < (2**32 if windows else 2**31):
+        return False
+    if windows:
+        return _windows_pid_alive(pid, executable)
     try:
         os.kill(pid, 0)
-        return True
-    except OSError:
+    except PermissionError:
+        pass  # EPERM means the process exists, but belongs to another user.
+    except (OSError, OverflowError, ValueError):
         return False
+    if executable:
+        actual = _posix_process_executable(pid)
+        if actual is not None:
+            return os.path.realpath(actual) == os.path.realpath(executable)
+    return True
 
 
 def _launched_pid() -> int | None:
@@ -343,22 +408,18 @@ def ensure_inkscape(
     not kill the user's editor. When ``open_path`` is omitted, a default blank canvas is
     opened so a live document window exists.
     """
-    if is_macos():
-        # Must be written before Inkscape starts: it reads preferences at launch.
-        platform_support.set_inkscape_python_preference()
-
     if _inkscape_registered(gdbus_path, address):
         return True
 
     if not inkscape_executable or not Path(inkscape_executable).exists():
         raise BusError(f"Inkscape executable not found: {inkscape_executable!r}")
 
-    # Never pile up instances. On macOS a wedged app (e.g. a modal dialog or the
-    # dyld_start bug) stays alive but never registers; launching another copy on
+    # Never pile up instances. A wedged app (for example, a modal dialog or a
+    # bundled-Python stall) stays alive but never registers; launching another copy on
     # every live call just exhausts the process table. Give the existing process
     # the registration window instead.
     existing = _launched_pid()
-    if existing is not None and _pid_alive(existing):
+    if existing is not None and _pid_alive(existing, inkscape_executable):
         if _wait_registered(gdbus_path, address, _INKSCAPE_REGISTER_TIMEOUT_S):
             return True
         log.warning(
@@ -368,12 +429,14 @@ def ensure_inkscape(
         return False
 
     env = dict(os.environ)
+    if is_macos():
+        # Only configure a stopped managed instance, never the user's normal profile.
+        platform_support.set_inkscape_python_preference()
+        env["INKSCAPE_PROFILE_DIR"] = str(platform_support.live_profile_dir())
     env["DBUS_SESSION_BUS_ADDRESS"] = address
     # An empty LANG (common in IDE terminals) makes GTK abort on UTF-8 conversion.
     if not env.get("LANG"):
         env["LANG"] = "C.UTF-8"
-    if not env.get("LC_ALL"):
-        env["LC_ALL"] = "C.UTF-8"
     argv = [inkscape_executable, open_path or default_canvas()]
 
     log.info("Launching Inkscape under MCP session bus: %s", argv)
